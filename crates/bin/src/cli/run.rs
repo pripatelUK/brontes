@@ -1,5 +1,8 @@
 use std::{path::Path, time::Duration};
 
+#[cfg(not(feature = "local-reth"))]
+use brontes_core::local_provider::LocalProvider;
+
 use brontes_core::decoding::Parser as DParser;
 use brontes_database::clickhouse::cex_config::CexDownloadConfig;
 use brontes_inspect::Inspectors;
