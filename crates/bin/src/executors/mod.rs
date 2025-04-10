@@ -139,6 +139,8 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
     }
 
     async fn build_internal(self, executor: BrontesTaskExecutor) -> eyre::Result<Brontes> {
+        tracing::info!(target: "brontes::build", "Starting build_internal");
+
         let futures = FuturesUnordered::new();
 
         let pricing_metrics = self.metrics.then(DexPricingMetrics::default);
@@ -673,10 +675,10 @@ impl Future for Brontes {
 
 pub enum RangeType {
     SingleRange {
-        start_block:   Option<u64>,
-        end_block:     Option<u64>,
+        start_block: Option<u64>,
+        end_block: Option<u64>,
         back_from_tip: u64,
-        from_db_tip:   bool,
+        from_db_tip: bool,
     },
     MultipleRanges(Vec<(u64, u64)>),
 }

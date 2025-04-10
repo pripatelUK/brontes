@@ -337,9 +337,14 @@ impl<T: TracingProvider, CH: ClickhouseHandle> Stream for MetadataLoader<T, CH> 
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
+        tracing::trace!(target: "brontes::metadata", force_no_dex=%self.force_no_dex_pricing, "Polling MetadataLoader");
+
         if self.force_no_dex_pricing {
+            tracing::trace!(target: "brontes::metadata", "Force no DEX pricing mode");
+
             // First check result_buf
             if let Some(res) = self.result_buf.pop_front() {
+                tracing::debug!(target: "brontes::metadata", "Returning cached result");
                 return Poll::Ready(Some(res));
             }
 
@@ -347,42 +352,52 @@ impl<T: TracingProvider, CH: ClickhouseHandle> Stream for MetadataLoader<T, CH> 
             while let Poll::Ready(Some((block, tree, metadata))) =
                 self.clickhouse_futures.poll_next_unpin(cx)
             {
+                tracing::debug!(target: "brontes::metadata", block_number=%block, "Processing clickhouse future");
                 let data = BlockData { metadata: Arc::new(metadata), tree: Arc::new(tree) };
                 self.result_buf.push_back(data);
             }
 
             // Check result_buf again after processing clickhouse futures
             if let Some(res) = self.result_buf.pop_front() {
+                tracing::debug!(target: "brontes::metadata", "Returning newly processed result");
                 return Poll::Ready(Some(res));
             }
 
             // Only return Pending if there are still futures to process
             if !self.clickhouse_futures.is_empty() {
+                tracing::trace!(target: "brontes::metadata", "Still have futures to process, returning Pending");
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
 
-            // Otherwise we're done
+            tracing::debug!(target: "brontes::metadata", "No more data to process, stream complete");
             return Poll::Ready(None);
         }
 
+        tracing::trace!(target: "brontes::metadata", "Normal DEX pricing mode");
         while let Poll::Ready(Some((block, tree, meta))) =
             self.clickhouse_futures.poll_next_unpin(cx)
         {
-            tracing::info!("clickhouse future resolved");
+            tracing::debug!(target: "brontes::metadata", block_number=%block, "Clickhouse future resolved");
             self.dex_pricer_stream
                 .add_pending_inspection(block, tree, meta)
         }
 
         match self.dex_pricer_stream.poll_next_unpin(cx) {
             Poll::Ready(Some((tree, metadata))) => {
+                tracing::debug!(target: "brontes::metadata", "DEX pricer stream yielded result");
                 Poll::Ready(Some(BlockData { metadata: Arc::new(metadata), tree: Arc::new(tree) }))
             }
-            Poll::Ready(None) => Poll::Ready(self.result_buf.pop_front()),
+            Poll::Ready(None) => {
+                tracing::debug!(target: "brontes::metadata", "DEX pricer stream complete");
+                Poll::Ready(self.result_buf.pop_front())
+            }
             Poll::Pending => {
                 if let Some(f) = self.result_buf.pop_front() {
+                    tracing::debug!(target: "brontes::metadata", "Returning cached result while DEX pricer pending");
                     Poll::Ready(Some(f))
                 } else {
+                    tracing::trace!(target: "brontes::metadata", "All streams pending");
                     Poll::Pending
                 }
             }
