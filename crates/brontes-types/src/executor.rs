@@ -140,6 +140,16 @@ impl BrontesTaskManager {
         debug!("gracefully shut down");
         true
     }
+
+    /// Takes ownership of the shutdown signal, preventing premature shutdown
+    pub fn take_signal(&mut self) -> Option<Signal> {
+        self.signal.take()
+    }
+
+    /// Returns true if this manager still owns its shutdown signal
+    pub fn has_signal(&self) -> bool {
+        self.signal.is_some()
+    }
 }
 
 impl Future for BrontesTaskManager {
@@ -550,7 +560,10 @@ impl Signal {
 
 impl Drop for Signal {
     fn drop(&mut self) {
-        tracing::info!(target: "brontes::executor::signal", has_sender=self.0.borrow().is_some(), "Signal dropped, triggering shutdown");
+        tracing::info!(target: "brontes::executor::signal", has_sender=self.0.borrow().is_some(), owned=true, "Signal dropped, triggering shutdown");
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
     }
 }
 
