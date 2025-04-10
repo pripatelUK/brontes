@@ -195,13 +195,8 @@ impl RunArgs {
         );
         tracing::info!(target: "brontes::execute", "Initialized inspectors");
 
-        let tracer = if snapshot_mode {
-            tracing::info!(target: "brontes::execute", "Running in snapshot mode, using local provider");
-            LocalProvider::new("".to_string(), 0)
-        } else {
-            tracing::info!(target: "brontes::execute", "Getting tracing provider for live mode");
-            get_tracing_provider(Path::new(&reth_db_path), max_tasks, task_executor.clone())
-        };
+        let tracer =
+            get_tracing_provider(Path::new(&reth_db_path), max_tasks, task_executor.clone());
         tracing::info!(target: "brontes::execute", "Got tracing provider");
 
         let parser = static_object(DParser::new(metrics_tx, libmdbx, tracer.clone()).await);
