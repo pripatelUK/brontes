@@ -1,6 +1,7 @@
 //! Ported from Reth tasks for our own use cases
 use std::{
     any::Any,
+    cell::RefCell,
     fmt::{Display, Formatter},
     pin::Pin,
     sync::{
@@ -535,13 +536,15 @@ impl Future for Shutdown {
 
 /// Shutdown signal that fires either manually or on drop by closing the channel
 #[derive(Debug)]
-pub struct Signal(oneshot::Sender<()>);
+pub struct Signal(RefCell<Option<oneshot::Sender<()>>>);
 
 impl Signal {
     /// Fire the signal manually.
-    pub fn fire(mut self) {
+    pub fn fire(self) {
         tracing::info!(target: "brontes::executor::signal", "Manually firing shutdown signal");
-        let _ = self.0.send(());
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
     }
 }
 
@@ -554,7 +557,7 @@ impl Drop for Signal {
 /// Create a channel pair that's used to propagate shutdown event
 pub fn signal() -> (Signal, Shutdown) {
     let (sender, receiver) = oneshot::channel();
-    (Signal(sender), Shutdown(receiver.shared()))
+    (Signal(RefCell::new(Some(sender))), Shutdown(receiver.shared()))
 }
 
 #[derive(Debug, thiserror::Error)]
