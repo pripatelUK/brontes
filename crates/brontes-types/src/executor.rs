@@ -33,7 +33,7 @@ pub struct BrontesTaskManager {
     /// Handle to the tokio runtime this task manager is associated with.
     ///
     /// See [`Handle`] docs.
-    handle:            Handle,
+    handle: Handle,
     /// Sender half for sending panic signals to this type
     panicked_tasks_tx: UnboundedSender<PanickedTaskError>,
     /// Listens for panicked tasks
@@ -41,11 +41,11 @@ pub struct BrontesTaskManager {
     /// The [Signal] to fire when all tasks should be shutdown.
     ///
     /// This is fired when dropped.
-    signal:            Option<Signal>,
+    signal: Option<Signal>,
     /// Receiver of the shutdown signal.
-    on_shutdown:       Shutdown,
+    on_shutdown: Shutdown,
     /// How many [GracefulShutdown] tasks are currently active
-    graceful_tasks:    Arc<AtomicUsize>,
+    graceful_tasks: Arc<AtomicUsize>,
 }
 
 impl BrontesTaskManager {
@@ -103,10 +103,10 @@ impl BrontesTaskManager {
     /// runtime this type is connected to.
     pub fn executor(&self) -> BrontesTaskExecutor {
         BrontesTaskExecutor {
-            handle:            self.handle.clone(),
-            on_shutdown:       self.on_shutdown.clone(),
+            handle: self.handle.clone(),
+            on_shutdown: self.on_shutdown.clone(),
             panicked_tasks_tx: self.panicked_tasks_tx.clone(),
-            graceful_tasks:    Arc::clone(&self.graceful_tasks),
+            graceful_tasks: Arc::clone(&self.graceful_tasks),
         }
     }
 
@@ -155,13 +155,13 @@ pub struct BrontesTaskExecutor {
     /// Handle to the tokio runtime this task manager is associated with.
     ///
     /// See [`Handle`] docs.
-    handle:            Handle,
+    handle: Handle,
     /// Receiver of the shutdown signal.
-    on_shutdown:       Shutdown,
+    on_shutdown: Shutdown,
     /// Sender half for sending panic signals to this type
     panicked_tasks_tx: UnboundedSender<PanickedTaskError>,
     /// How many [GracefulShutdown] tasks are currently active
-    graceful_tasks:    Arc<AtomicUsize>,
+    graceful_tasks: Arc<AtomicUsize>,
 }
 
 impl BrontesTaskExecutor {
@@ -174,6 +174,7 @@ impl BrontesTaskExecutor {
 
     /// Causes a shutdown to occur.
     pub fn trigger_shutdown(&self, task_name: &'static str) {
+        tracing::info!(target: "brontes::executor", task_name, "Triggering shutdown");
         let _ = self
             .panicked_tasks_tx
             .send(PanickedTaskError { error: None, task_name });
@@ -192,6 +193,7 @@ impl BrontesTaskExecutor {
     /// Runs a future to completion on this Handle's associated Runtime.
     #[track_caller]
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        tracing::trace!(target: "brontes::executor", "Blocking on future");
         self.handle.block_on(future)
     }
 
@@ -200,6 +202,7 @@ impl BrontesTaskExecutor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        tracing::trace!(target: "brontes::executor", ?task_kind, "Spawning task on runtime");
         match task_kind {
             TaskKind::Default => self.handle.spawn(fut),
             TaskKind::Blocking => {
@@ -214,6 +217,7 @@ impl BrontesTaskExecutor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        tracing::trace!(target: "brontes::executor", ?task_kind, "Spawning regular task");
         let on_shutdown = self.on_shutdown.clone();
 
         // Wrap the original future to increment the finished tasks counter upon
@@ -331,6 +335,7 @@ impl BrontesTaskExecutor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        tracing::info!(target: "brontes::executor", task_name=name, "Spawning critical task with shutdown signal");
         let panicked_tasks_tx = self.panicked_tasks_tx.clone();
         let on_shutdown = self.on_shutdown.clone();
         let fut = f(on_shutdown);
@@ -346,10 +351,13 @@ impl BrontesTaskExecutor {
             .map(|_| ())
             .in_current_span();
 
-        self.handle.spawn(task)
+        let handle = self.handle.spawn(task);
+        tracing::info!(target: "brontes::executor", task_name=name, "Critical task with shutdown signal spawned successfully");
+        handle
     }
 
     pub fn get_graceful_shutdown(&self) -> GracefulShutdown {
+        tracing::trace!(target: "brontes::executor", "Getting graceful shutdown");
         let on_shutdown = LocalGracefulShutdown::new(
             self.on_shutdown.clone(),
             LocalGracefulShutdownGuard::new(Arc::clone(&self.graceful_tasks)),
@@ -386,6 +394,7 @@ impl BrontesTaskExecutor {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        tracing::info!(target: "brontes::executor", task_name=name, "Spawning critical task with graceful shutdown signal");
         let panicked_tasks_tx = self.panicked_tasks_tx.clone();
         let on_shutdown = LocalGracefulShutdown::new(
             self.on_shutdown.clone(),
@@ -406,7 +415,9 @@ impl BrontesTaskExecutor {
             .map(|_| ())
             .in_current_span();
 
-        self.handle.spawn(task)
+        let handle = self.handle.spawn(task);
+        tracing::info!(target: "brontes::executor", task_name=name, "Critical task with graceful shutdown spawned successfully");
+        handle
     }
 
     /// This spawns a regular task onto the runtime.
@@ -501,11 +512,24 @@ impl Future for Shutdown {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let pin = self.get_mut();
-        if pin.0.is_terminated() || pin.0.poll_unpin(cx).is_ready() {
+        let is_terminated = pin.0.is_terminated();
+        let poll_result = if is_terminated {
             Poll::Ready(())
         } else {
-            Poll::Pending
+            match pin.0.poll_unpin(cx) {
+                Poll::Ready(_) => {
+                    tracing::info!(target: "brontes::executor::shutdown", "Shutdown signal received");
+                    Poll::Ready(())
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        };
+
+        if poll_result.is_ready() {
+            tracing::info!(target: "brontes::executor::shutdown", "Shutdown completed");
         }
+
+        poll_result
     }
 }
 
@@ -516,7 +540,14 @@ pub struct Signal(oneshot::Sender<()>);
 impl Signal {
     /// Fire the signal manually.
     pub fn fire(self) {
+        tracing::info!(target: "brontes::executor::signal", "Manually firing shutdown signal");
         let _ = self.0.send(());
+    }
+}
+
+impl Drop for Signal {
+    fn drop(&mut self) {
+        tracing::info!(target: "brontes::executor::signal", "Signal dropped, triggering shutdown");
     }
 }
 
@@ -529,7 +560,7 @@ pub fn signal() -> (Signal, Shutdown) {
 #[derive(Debug, thiserror::Error)]
 pub struct PanickedTaskError {
     task_name: &'static str,
-    error:     Option<String>,
+    error: Option<String>,
 }
 
 impl Display for PanickedTaskError {
@@ -547,7 +578,7 @@ impl PanickedTaskError {
     fn new(task_name: &'static str, error: Box<dyn Any>) -> Self {
         let error = match error.downcast::<String>() {
             Ok(value) => Some(*value),
-            Err(error) => match error.downcast::<&str>() {
+            Err(error) => match error.downcast_ref::<&str>() {
                 Ok(value) => Some(value.to_string()),
                 Err(_) => None,
             },
@@ -571,7 +602,7 @@ enum TaskKind {
 #[derive(Debug)]
 pub struct LocalGracefulShutdown {
     _shutdown: Shutdown,
-    _guard:    Option<LocalGracefulShutdownGuard>,
+    _guard: Option<LocalGracefulShutdownGuard>,
 }
 
 impl LocalGracefulShutdown {
