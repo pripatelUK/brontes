@@ -550,7 +550,7 @@ impl Signal {
 
 impl Drop for Signal {
     fn drop(&mut self) {
-        tracing::info!(target: "brontes::executor::signal", "Signal dropped, triggering shutdown");
+        tracing::info!(target: "brontes::executor::signal", has_sender=self.0.borrow().is_some(), "Signal dropped, triggering shutdown");
     }
 }
 

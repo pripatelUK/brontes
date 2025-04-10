@@ -77,6 +77,7 @@ where
     F: Future<Output = Result<(), E>>,
     E: Send + Sync + From<brontes_types::PanickedTaskError> + 'static,
 {
+    tracing::info!(target: "brontes::runner", "Starting run_to_completion_or_panic with task manager");
     {
         pin_mut!(fut);
         tokio::select! {
@@ -128,8 +129,8 @@ where
 }
 
 struct AsyncCliRunner {
-    context:       CliContext,
-    task_manager:  BrontesTaskManager,
+    context: CliContext,
+    task_manager: BrontesTaskManager,
     tokio_runtime: tokio::runtime::Runtime,
 }
 
