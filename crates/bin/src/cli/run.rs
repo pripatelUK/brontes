@@ -27,35 +27,35 @@ const SECONDS_TO_US_FLOAT: f64 = 1_000_000.0;
 pub struct RunArgs {
     /// Optional Start Block, if omitted it will run at tip until killed
     #[arg(long, short)]
-    pub start_block:          Option<u64>,
+    pub start_block: Option<u64>,
     /// Optional End Block, if omitted it will run historically & at tip until
     /// killed
     #[arg(long, short)]
-    pub end_block:            Option<u64>,
+    pub end_block: Option<u64>,
     /// starts running at tip from where brontes was last left at.
     #[arg(long, default_value_t = false)]
-    pub from_db_tip:          bool,
+    pub from_db_tip: bool,
     /// Optional Multiple Ranges, format: "start1-end1 start2-end2 ..."
     /// Use this if you want to specify the exact, non continuous block ranges
     /// you want to run
     #[arg(long, num_args = 1.., value_delimiter = ' ')]
-    pub ranges:               Option<Vec<String>>,
+    pub ranges: Option<Vec<String>>,
     /// Optional Max Tasks, if omitted it will default to 80% of the number of
     /// physical cores on your machine
     #[arg(long, short)]
-    pub max_tasks:            Option<u64>,
+    pub max_tasks: Option<u64>,
     /// Optional minimum batch size
     #[arg(long, default_value = "500")]
-    pub min_batch_size:       u64,
+    pub min_batch_size: u64,
     /// Optional quote asset, if omitted it will default to USDT
     #[arg(long, short, default_value = USDT_ADDRESS_STRING)]
-    pub quote_asset:          String,
+    pub quote_asset: String,
     /// Inspectors to run. If omitted it defaults to running all inspectors
     #[arg(long, short, value_delimiter = ',')]
-    pub inspectors:           Option<Vec<Inspectors>>,
+    pub inspectors: Option<Vec<Inspectors>>,
     /// Time window arguments for cex data downloads
     #[clap(flatten)]
-    pub time_window_args:     TimeWindowArgs,
+    pub time_window_args: TimeWindowArgs,
     /// CEX exchanges to consider for cex-dex analysis
     #[arg(
         long,
@@ -63,11 +63,11 @@ pub struct RunArgs {
         default_value = "Binance,Coinbase,Okex,BybitSpot,Kucoin",
         value_delimiter = ','
     )]
-    pub cex_exchanges:        Vec<CexExchange>,
+    pub cex_exchanges: Vec<CexExchange>,
     /// Force DEX price calculation for every block, ignoring existing database
     /// values.
     #[arg(long, short, default_value = "false")]
-    pub force_dex_pricing:    bool,
+    pub force_dex_pricing: bool,
     /// Disables DEX pricing. Inspectors needing DEX prices will only calculate
     /// token PnL, not USD PnL, if DEX pricing is unavailable in the
     /// database.
@@ -75,28 +75,28 @@ pub struct RunArgs {
     pub force_no_dex_pricing: bool,
     /// Number of blocks to lag behind the chain tip when processing.
     #[arg(long, default_value = "10")]
-    pub behind_tip:           u64,
+    pub behind_tip: u64,
     /// Legacy, run in CLI only mode (no TUI) - will output progress bars to
     /// stdout
     #[arg(long, default_value = "true")]
-    pub cli_only:             bool,
+    pub cli_only: bool,
     /// Export metrics
     #[arg(long, default_value = "false")]
-    pub with_metrics:         bool,
+    pub with_metrics: bool,
     /// Wether or not to use a fallback server.
     #[arg(long, default_value_t = false)]
-    pub enable_fallback:      bool,
+    pub enable_fallback: bool,
     /// Address of the fallback server.
     /// Triggers database writes if the main connection fails, preventing data
     /// loss.
     #[arg(long)]
-    pub fallback_server:      Option<String>,
+    pub fallback_server: Option<String>,
     /// Set a custom run ID used when inserting data into the Clickhouse
     ///
     /// If omitted, the ID will be automatically incremented from the last run
     /// stored in the Clickhouse database.
     #[arg(long, short)]
-    pub run_id:               Option<u64>,
+    pub run_id: Option<u64>,
 
     /// shows a cool display at startup
     #[arg(long, short, default_value_t = false)]
@@ -105,6 +105,7 @@ pub struct RunArgs {
 
 impl RunArgs {
     pub async fn execute(mut self, brontes_db_path: String, ctx: CliContext) -> eyre::Result<()> {
+        tracing::info!(target: "brontes::execute", "Starting execute function");
         self.check_proper_range()?;
 
         if self.waterfall {
@@ -120,9 +121,12 @@ impl RunArgs {
         let quote_asset = self.quote_asset.parse()?;
         tracing::info!(target: "brontes", "parsed quote asset");
         let task_executor = ctx.task_executor;
+        tracing::info!(target: "brontes::execute", "Got task executor");
 
         let max_tasks = determine_max_tasks(self.max_tasks);
+        tracing::info!(target: "brontes::execute", max_tasks, "Determined max tasks");
         init_thread_pools(max_tasks as usize);
+        tracing::info!(target: "brontes::execute", "Initialized thread pools");
 
         let (metrics_tx, metrics_rx) = unbounded_channel();
         let metrics_listener = ParserMetricsListener::new(UnboundedYapperReceiver::new(
@@ -130,29 +134,39 @@ impl RunArgs {
             10_000,
             "metrics".to_string(),
         ));
+        tracing::info!(target: "brontes::execute", "Created metrics listener");
 
         task_executor.spawn_critical("metrics", metrics_listener);
+        tracing::info!(target: "brontes::execute", "Spawned metrics listener task");
 
         let hr = self.try_start_fallback_server().await;
+        tracing::info!(target: "brontes::execute", fallback_enabled=self.enable_fallback, "Fallback server setup complete");
 
         tracing::info!(target: "brontes", "starting database initialization at: '{}'", brontes_db_path);
         let libmdbx =
             static_object(load_database(&task_executor, brontes_db_path, hr, self.run_id).await?);
+        tracing::info!(target: "brontes::execute", "Created static libmdbx object");
 
         let tip = static_object(load_tip_database(libmdbx)?);
         tracing::info!(target: "brontes", "initialized libmdbx database");
+        tracing::info!(target: "brontes::execute", "Created static tip object");
 
         let load_window = self.load_time_window();
+        tracing::info!(target: "brontes::execute", load_window, "Calculated load window");
 
         let cex_download_config = CexDownloadConfig::new(
             // the run time window. notably we download the max window
             (load_window as u64, load_window as u64),
             self.cex_exchanges.clone(),
         );
+        tracing::info!(target: "brontes::execute", "Created CEX download config");
 
         let range_type = self.get_range_type()?;
+        tracing::info!(target: "brontes::execute", ?range_type, "Got range type");
+
         let clickhouse = static_object(load_clickhouse(cex_download_config, self.run_id).await?);
         tracing::info!(target: "brontes", "Databases initialized");
+        tracing::info!(target: "brontes::execute", "Created static clickhouse object");
 
         let only_cex_dex = self
             .inspectors
@@ -162,12 +176,14 @@ impl RunArgs {
                     && (f.contains(&Inspectors::CexDex) || f.contains(&Inspectors::CexDexMarkout))
             })
             .unwrap_or(false);
+        tracing::info!(target: "brontes::execute", only_cex_dex, "Determined if only running CEX/DEX");
 
         if only_cex_dex {
             self.force_no_dex_pricing = true;
         }
 
         let trade_config = self.time_window_args.trade_config();
+        tracing::info!(target: "brontes::execute", "Created trade config");
 
         let inspectors = init_inspectors(
             quote_asset,
@@ -177,15 +193,21 @@ impl RunArgs {
             trade_config,
             self.with_metrics,
         );
+        tracing::info!(target: "brontes::execute", "Initialized inspectors");
 
         let tracer =
             get_tracing_provider(Path::new(&reth_db_path), max_tasks, task_executor.clone());
+        tracing::info!(target: "brontes::execute", "Got tracing provider");
+
         let parser = static_object(DParser::new(metrics_tx, libmdbx, tracer.clone()).await);
+        tracing::info!(target: "brontes::execute", "Created static parser object");
 
         let executor = task_executor.clone();
+        tracing::info!(target: "brontes::execute", "About to spawn critical task with graceful shutdown");
         let result = executor
             .clone()
             .spawn_critical_with_graceful_shutdown_signal("run init", |shutdown| async move {
+                tracing::info!(target: "brontes::execute", "Inside critical task, creating BrontesRunConfig");
                 if let Ok(brontes) = BrontesRunConfig::<_, _, _, MevProcessor>::new(
                     range_type,
                     max_tasks,
@@ -209,11 +231,17 @@ impl RunArgs {
                     tracing::error!(%e);
                     e
                 }) {
+                    tracing::info!(target: "brontes::execute", "BrontesRunConfig built successfully, starting execution");
                     brontes.await;
+                    tracing::info!(target: "brontes::execute", "BrontesRunConfig execution completed");
+                } else {
+                    tracing::error!(target: "brontes::execute", "Failed to build BrontesRunConfig");
                 }
             });
+        tracing::info!(target: "brontes::execute", "Spawned critical task");
 
         result.await?;
+        tracing::info!(target: "brontes::execute", "Execute function completed");
 
         Ok(())
     }
@@ -224,10 +252,10 @@ impl RunArgs {
             Ok(RangeType::MultipleRanges(parsed_ranges))
         } else {
             Ok(RangeType::SingleRange {
-                start_block:   self.start_block,
-                end_block:     self.end_block,
+                start_block: self.start_block,
+                end_block: self.end_block,
                 back_from_tip: self.behind_tip,
-                from_db_tip:   self.from_db_tip,
+                from_db_tip: self.from_db_tip,
             })
         }
     }
@@ -391,32 +419,28 @@ pub struct TimeWindowArgs {
 impl TimeWindowArgs {
     fn trade_config(&self) -> CexDexTradeConfig {
         CexDexTradeConfig {
-            initial_vwap_pre_block_us:  (self.initial_vwap_pre * SECONDS_TO_US_FLOAT) as u64,
+            initial_vwap_pre_block_us: (self.initial_vwap_pre * SECONDS_TO_US_FLOAT) as u64,
             initial_vwap_post_block_us: (self.initial_vwap_post * SECONDS_TO_US_FLOAT) as u64,
-            max_vwap_pre_block_us:      (self.max_vwap_pre * SECONDS_TO_US_FLOAT) as u64,
-            max_vwap_post_block_us:     (self.max_vwap_post * SECONDS_TO_US_FLOAT) as u64,
-            vwap_scaling_diff_us:       (self.vwap_scaling_diff * SECONDS_TO_US_FLOAT) as u64,
-            vwap_time_step_us:          (self.vwap_time_step * SECONDS_TO_US_FLOAT) as u64,
+            max_vwap_pre_block_us: (self.max_vwap_pre * SECONDS_TO_US_FLOAT) as u64,
+            max_vwap_post_block_us: (self.max_vwap_post * SECONDS_TO_US_FLOAT) as u64,
+            vwap_scaling_diff_us: (self.vwap_scaling_diff * SECONDS_TO_US_FLOAT) as u64,
+            vwap_time_step_us: (self.vwap_time_step * SECONDS_TO_US_FLOAT) as u64,
 
-            use_block_time_weights_vwap:       self.block_time_weights_vwap,
-            pre_decay_weight_vwap:             self.pre_decay_weight_vwap,
-            post_decay_weight_vwap:            self.post_decay_weight_vwap,
-            initial_optimistic_pre_block_us:   (self.initial_optimistic_pre * SECONDS_TO_US_FLOAT)
+            use_block_time_weights_vwap: self.block_time_weights_vwap,
+            pre_decay_weight_vwap: self.pre_decay_weight_vwap,
+            post_decay_weight_vwap: self.post_decay_weight_vwap,
+            initial_optimistic_pre_block_us: (self.initial_optimistic_pre * SECONDS_TO_US_FLOAT)
                 as u64,
-            initial_optimistic_post_block_us:  (self.initial_optimistic_post * SECONDS_TO_US_FLOAT)
+            initial_optimistic_post_block_us: (self.initial_optimistic_post * SECONDS_TO_US_FLOAT)
                 as u64,
-            max_optimistic_pre_block_us:       (self.max_optimistic_pre * SECONDS_TO_US_FLOAT)
-                as u64,
-            max_optimistic_post_block_us:      (self.max_optimistic_post * SECONDS_TO_US_FLOAT)
-                as u64,
-            optimistic_scaling_diff_us:        (self.optimistic_scaling_diff * SECONDS_TO_US_FLOAT)
-                as u64,
-            optimistic_time_step_us:           (self.optimistic_time_step * SECONDS_TO_US_FLOAT)
-                as u64,
+            max_optimistic_pre_block_us: (self.max_optimistic_pre * SECONDS_TO_US_FLOAT) as u64,
+            max_optimistic_post_block_us: (self.max_optimistic_post * SECONDS_TO_US_FLOAT) as u64,
+            optimistic_scaling_diff_us: (self.optimistic_scaling_diff * SECONDS_TO_US_FLOAT) as u64,
+            optimistic_time_step_us: (self.optimistic_time_step * SECONDS_TO_US_FLOAT) as u64,
             use_block_time_weights_optimistic: self.block_time_weights_optimistic,
-            pre_decay_weight_op:               self.pre_decay_weight_optimistic,
-            post_decay_weight_op:              self.post_decay_weight_optimistic,
-            quote_offset_from_block_us:        (self.quote_offset * SECONDS_TO_US_FLOAT) as u64,
+            pre_decay_weight_op: self.pre_decay_weight_optimistic,
+            post_decay_weight_op: self.post_decay_weight_optimistic,
+            quote_offset_from_block_us: (self.quote_offset * SECONDS_TO_US_FLOAT) as u64,
         }
     }
 }
