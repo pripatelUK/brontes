@@ -539,7 +539,7 @@ pub struct Signal(oneshot::Sender<()>);
 
 impl Signal {
     /// Fire the signal manually.
-    pub fn fire(self) {
+    pub fn fire(mut self) {
         tracing::info!(target: "brontes::executor::signal", "Manually firing shutdown signal");
         let _ = self.0.send(());
     }
@@ -578,10 +578,13 @@ impl PanickedTaskError {
     fn new(task_name: &'static str, error: Box<dyn Any>) -> Self {
         let error = match error.downcast::<String>() {
             Ok(value) => Some(*value),
-            Err(error) => match error.downcast_ref::<&str>() {
-                Ok(value) => Some(value.to_string()),
-                Err(_) => None,
-            },
+            Err(error) => {
+                if let Some(value) = error.downcast_ref::<&str>() {
+                    Some((*value).to_string())
+                } else {
+                    None
+                }
+            }
         };
 
         Self { task_name, error }
@@ -589,6 +592,7 @@ impl PanickedTaskError {
 }
 
 /// Determines how a task is spawned
+#[derive(Debug)]
 enum TaskKind {
     /// Spawn the task to the default executor [Handle::spawn]
     Default,
