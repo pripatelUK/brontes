@@ -11,9 +11,9 @@ use arrow::{array::RecordBatchReader, error::ArrowError, record_batch::RecordBat
 use brontes_types::{
     db::{
         address_meta::AddressMeta, builder::Builder, bundle_header::BundleHeader,
-        dex::DexQuoteWithIndex, searcher::SearcherContract, Tables,
+        dex::DexQuoteWithIndex, searcher::SearcherContract, traits::LibmdbxReader, Tables,
     },
-    mev::{Bundle, MevBlock},
+    mev::{Bundle, BundleData, MevBlock, MevType},
     normalized_actions::NormalizedActions,
     pair::Pair,
 };

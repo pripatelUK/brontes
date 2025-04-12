@@ -904,29 +904,46 @@ impl LibmdbxReader for LibmdbxReadWriter {
         )
     }
 
-    fn fetch_dex_quotes_range(
+    #[instrument(level = "trace", skip(self))]
+    async fn fetch_dex_quotes_range(
         &self,
         start_block: u64,
         end_block: u64,
-    ) -> impl std::future::Future<Output = eyre::Result<Vec<(u64, DexQuoteWithIndex)>>> + Send {
-        async move {
-            // TODO: Joe - can we optimize this. It takes forever
-            let start_key = make_key(start_block, 0);
-            let end_key = make_key(end_block, u16::MAX);
-            let range = start_key..=end_key;
+    ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>> {
+        let mut all_quotes_data = Vec::new();
+        info!(target: "brontes::db::export", start_block, end_block, "Fetching DexQuotes range...");
 
-            let tx = self.db.no_timeout_ro_tx()?;
-            let res = tx
-                .walk_range::<tables::DexQuotes>(range)?
-                .map(|r| {
-                    let (key, val) = r?;
-                    let (block, _tx_idx) = decompose_key(key);
-                    Ok((block, val.inner.into_inner()))
-                })
-                .collect::<eyre::Result<Vec<(u64, DexQuoteWithIndex)>>>()?;
-
-            Ok(res)
+        // Iterate block by block (exclusive end_block)
+        for block_num in start_block..end_block {
+            match self.get_dex_quotes(block_num) {
+                // Use get_dex_quotes which is already implemented on self
+                Ok(dex_quotes_for_block) => {
+                    // Convert DexQuotes to Vec<(u64, DexQuoteWithIndex)>
+                    for (tx_idx, maybe_quote_map) in dex_quotes_for_block.0.into_iter().enumerate()
+                    {
+                        if let Some(quote_map) = maybe_quote_map {
+                            let quote_vec: Vec<(Pair, DexPrices)> = quote_map.into_iter().collect();
+                            if !quote_vec.is_empty() {
+                                // Create DexQuoteWithIndex struct for this tx_idx
+                                let dex_quote_with_index = DexQuoteWithIndex {
+                                    tx_idx: tx_idx as u16, // Ensure cast is safe, maybe add check?
+                                    quote:  quote_vec,
+                                };
+                                // Push tuple (block_num, DexQuoteWithIndex)
+                                all_quotes_data.push((block_num, dex_quote_with_index));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Log and continue if fetching for a single block fails
+                    warn!(target: "brontes::db::export", block=block_num, error=?e, "Failed to fetch dex quotes for block, skipping.");
+                    // Continue to the next block instead of returning an error
+                }
+            }
         }
+        info!(target: "brontes::db::export", count=all_quotes_data.len(), "Finished fetching DexQuotes range.");
+        Ok(all_quotes_data)
     }
 }
 
