@@ -9,12 +9,8 @@ use std::{
 use alloy_primitives::{Address, U128};
 use arrow::{array::RecordBatchReader, error::ArrowError, record_batch::RecordBatch};
 use brontes_types::{
-    db::{
-        address_meta::AddressMeta, builder::Builder, bundle_header::BundleHeader,
-        dex::DexQuoteWithIndex, searcher::SearcherContract, traits::LibmdbxReader, Tables,
-    },
+    db::{dex::DexQuoteWithIndex, searcher::SearcherContract, traits::LibmdbxReader},
     mev::{Bundle, BundleData, MevBlock, MevType},
-    normalized_actions::NormalizedActions,
     pair::Pair,
 };
 use chrono::Local;
@@ -31,11 +27,7 @@ use serde_json;
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    db::LibmdbxRW,
-    libmdbx::{LibMdbx, LibmdbxReadWriteTrait},
-    traits::read::DatabaseReaderExt,
-};
+use crate::Tables;
 
 #[allow(dead_code)]
 mod address_meta;
