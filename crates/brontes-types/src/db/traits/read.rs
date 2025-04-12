@@ -2,9 +2,14 @@ use alloy_primitives::Address;
 
 use crate::{
     db::{
-        address_metadata::AddressMetadata, address_to_protocol_info::ProtocolInfo,
-        builder::BuilderInfo, cex::trades::CexTradeMap, dex::DexQuotes, metadata::Metadata,
-        mev_block::MevBlockWithClassified, searcher::SearcherInfo,
+        address_metadata::AddressMetadata,
+        address_to_protocol_info::ProtocolInfo,
+        builder::BuilderInfo,
+        cex::trades::CexTradeMap,
+        dex::{DexQuoteWithIndex, DexQuotes},
+        metadata::Metadata,
+        mev_block::MevBlockWithClassified,
+        searcher::SearcherInfo,
         token_info::TokenInfoWithAddress,
     },
     pair::Pair,
@@ -155,4 +160,10 @@ pub trait LibmdbxReader: Send + Sync + Unpin + 'static {
     }
 
     fn load_trace(&self, block_num: u64) -> eyre::Result<Vec<TxTrace>>;
+
+    async fn fetch_dex_quotes_range(
+        &self,
+        start_block: u64,
+        end_block: u64,
+    ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>>;
 }
