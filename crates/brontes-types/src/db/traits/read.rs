@@ -161,9 +161,9 @@ pub trait LibmdbxReader: Send + Sync + Unpin + 'static {
 
     fn load_trace(&self, block_num: u64) -> eyre::Result<Vec<TxTrace>>;
 
-    async fn fetch_dex_quotes_range(
+    fn fetch_dex_quotes_range(
         &self,
         start_block: u64,
         end_block: u64,
-    ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>>;
+    ) -> impl std::future::Future<Output = eyre::Result<Vec<(u64, DexQuoteWithIndex)>>> + Send;
 }

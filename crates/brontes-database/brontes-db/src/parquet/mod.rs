@@ -1,24 +1,41 @@
 use std::{
+    fmt::Display,
     fs::File,
+    io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use arrow::record_batch::RecordBatch;
+use alloy_primitives::{Address, U128};
+use arrow::{array::RecordBatchReader, error::ArrowError, record_batch::RecordBatch};
 use brontes_types::{
-    db::traits::LibmdbxReader,
-    mev::{BundleData, MevType},
+    db::{
+        address_meta::AddressMeta, builder::Builder, bundle_header::BundleHeader,
+        dex::DexQuoteWithIndex, searcher::SearcherContract, Tables,
+    },
+    mev::{Bundle, MevBlock},
+    normalized_actions::NormalizedActions,
+    pair::Pair,
 };
 use chrono::Local;
 use eyre::{Error, Ok, Result, WrapErr};
 use futures::future::try_join_all;
+use itertools::Itertools;
 use parquet::{
     arrow::{async_writer::AsyncArrowWriter, ArrowWriter},
-    basic::Compression,
-    file::properties::WriterProperties,
+    basic::{Compression, Encoding, ZstdLevel},
+    errors::ParquetError,
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
 };
-use tracing::error;
+use serde_json;
+use thiserror::Error;
+use tracing::{debug, error, info, warn};
 
-use crate::Tables;
+use crate::{
+    db::LibmdbxRW,
+    libmdbx::{LibMdbx, LibmdbxReadWriteTrait},
+    traits::read::DatabaseReaderExt,
+};
 
 #[allow(dead_code)]
 mod address_meta;

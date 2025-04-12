@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{
-        ArrayRef, BooleanBuilder, Float64Builder, StringBuilder, StructArray, UInt16Builder,
-        UInt64Builder,
-    },
+    array::{Array, Float64Array, Float64Builder, StringArray, StringBuilder, UInt16Builder},
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
 };
-use brontes_types::db::dex::{DexPrices, DexQuoteWithIndex};
-use malachite::num::conversion::{string::options::ToSciOptions, traits::ToSci}; /* Updated import */
+use brontes_types::{db::dex::DexQuoteWithIndex, pair::Pair};
+use malachite::{
+    num::conversion::{string::options::ToSciOptions, traits::ToSci},
+    Rational,
+};
 use tracing::warn;
 
 use super::utils::build_record_batch;
@@ -39,53 +39,21 @@ pub fn dex_quotes_to_record_batch(
     let mut is_transfer_builder = BooleanBuilder::with_capacity(initial_capacity);
     let mut first_hop_connections_builder = UInt64Builder::with_capacity(initial_capacity);
 
-    // Configure options for to_sci
+    // Configure options for scientific notation string conversion
     let mut sci_options = ToSciOptions::default();
-    sci_options.set_max_significant_digits(Some(36)); // Use significant digits for precision
+    sci_options.set_scale(36); // Use scale for decimal places
 
     for (block_number, dex_quote_with_index) in block_quotes {
         let tx_idx = dex_quote_with_index.tx_idx;
         for (pair, dex_prices) in dex_quote_with_index.quote {
             block_number_builder.append_value(block_number);
-            tx_idx_builder.append_value(tx_idx);
+            tx_idx_builder.append_value(tx_idx as u16);
             pair_token0_builder.append_value(pair.0.to_string());
             pair_token1_builder.append_value(pair.1.to_string());
 
-            // Convert Rational to f64 using to_sci_with_options
-            match dex_prices
-                .pre_state
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => pre_state_price_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pre_state", value=%dex_prices.pre_state, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    pre_state_price_builder.append_value(f64::NAN); // Use NaN for parse failures
-                }
-            }
-            match dex_prices
-                .post_state
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => post_state_price_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="post_state", value=%dex_prices.post_state, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    post_state_price_builder.append_value(f64::NAN);
-                }
-            }
-            match dex_prices
-                .pool_liquidity
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => pool_liquidity_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pool_liquidity", value=%dex_prices.pool_liquidity, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    pool_liquidity_builder.append_value(f64::NAN);
-                }
-            }
-
+            pre_state_price_builder.append_option(dex_prices.pre_state.to_f64());
+            post_state_price_builder.append_option(dex_prices.post_state.to_f64());
+            pool_liquidity_builder.append_option(dex_prices.pool_liquidity.to_f64());
             goes_through_token0_builder.append_value(dex_prices.goes_through.0.to_string());
             goes_through_token1_builder.append_value(dex_prices.goes_through.1.to_string());
             is_transfer_builder.append_value(dex_prices.is_transfer);
