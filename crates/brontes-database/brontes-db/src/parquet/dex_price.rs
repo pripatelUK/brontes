@@ -44,7 +44,9 @@ pub fn dex_quotes_to_record_batch(
 
     // Configure options for scientific notation string conversion
     let mut sci_options = ToSciOptions::default();
-    sci_options.set_scale(36); // Use scale for decimal places
+    // Using max_significant_digits is generally better for preserving overall
+    // magnitude
+    sci_options.set_max_significant_digits(Some(36));
 
     for (block_number, dex_quote_with_index) in block_quotes {
         let tx_idx = dex_quote_with_index.tx_idx;
@@ -54,9 +56,41 @@ pub fn dex_quotes_to_record_batch(
             pair_token0_builder.append_value(pair.0.to_string());
             pair_token1_builder.append_value(pair.1.to_string());
 
-            pre_state_price_builder.append_option(dex_prices.pre_state.to_numerator().to_f64());
-            post_state_price_builder.append_option(dex_prices.post_state.to_numerator().to_f64());
-            pool_liquidity_builder.append_option(dex_prices.pool_liquidity.to_numerator().to_f64());
+            // Convert Rational to f64 using to_sci_with_options and parse, fallback to NaN
+            match dex_prices
+                .pre_state
+                .to_sci_with_options(sci_options)
+                .parse::<f64>()
+            {
+                Ok(val) => pre_state_price_builder.append_value(val),
+                Err(e) => {
+                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pre_state", value=%dex_prices.pre_state, error=?e, "Failed to parse Rational as f64, using NaN.");
+                    pre_state_price_builder.append_value(f64::NAN);
+                }
+            }
+            match dex_prices
+                .post_state
+                .to_sci_with_options(sci_options)
+                .parse::<f64>()
+            {
+                Ok(val) => post_state_price_builder.append_value(val),
+                Err(e) => {
+                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="post_state", value=%dex_prices.post_state, error=?e, "Failed to parse Rational as f64, using NaN.");
+                    post_state_price_builder.append_value(f64::NAN);
+                }
+            }
+            match dex_prices
+                .pool_liquidity
+                .to_sci_with_options(sci_options)
+                .parse::<f64>()
+            {
+                Ok(val) => pool_liquidity_builder.append_value(val),
+                Err(e) => {
+                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pool_liquidity", value=%dex_prices.pool_liquidity, error=?e, "Failed to parse Rational as f64, using NaN.");
+                    pool_liquidity_builder.append_value(f64::NAN);
+                }
+            }
+
             goes_through_token0_builder.append_value(dex_prices.goes_through.0.to_string());
             goes_through_token1_builder.append_value(dex_prices.goes_through.1.to_string());
             is_transfer_builder.append_value(dex_prices.is_transfer);
