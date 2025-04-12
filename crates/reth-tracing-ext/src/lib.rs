@@ -70,8 +70,20 @@ impl TracingClient {
         static_files_path: PathBuf,
     ) -> Self {
         let chain = MAINNET.clone();
-        let static_file_provider =
-            StaticFileProvider::read_only(static_files_path.clone(), true).unwrap();
+        let static_file_provider = match StaticFileProvider::read_only(
+            static_files_path.clone(),
+            true,
+        ) {
+            Ok(provider) => provider,
+            Err(e) => {
+                tracing::error!(path = ?static_files_path, error = %e, "Failed to initialize Reth static file provider");
+                panic!(
+                    "Critical error: Could not open Reth static file provider at path {:?}. \
+                     Error: {}",
+                    static_files_path, e
+                );
+            }
+        };
 
         let provider_factory: ProviderFactory<
             NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>,
@@ -120,7 +132,17 @@ impl TracingClient {
     }
 
     pub fn new(db_path: &Path, max_tasks: u64, task_executor: BrontesTaskExecutor) -> Self {
-        let db = Arc::new(init_db(db_path).unwrap());
+        let db = match init_db(db_path) {
+            Ok(db_env) => Arc::new(db_env),
+            Err(e) => {
+                // Log the specific error before panicking
+                tracing::error!(path = ?db_path, error = %e, "Failed to initialize Reth database");
+                panic!(
+                    "Critical error: Could not open Reth database at path {:?}. Error: {}",
+                    db_path, e
+                );
+            }
+        };
         let mut static_files = db_path.to_path_buf();
         static_files.pop();
         static_files.push("static_files");
