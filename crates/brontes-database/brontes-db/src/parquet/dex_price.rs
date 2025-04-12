@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{Array, Float64Array, Float64Builder, StringArray, StringBuilder, UInt16Builder},
+    array::{
+        Array, BooleanBuilder, Float64Array, Float64Builder, StringArray, StringBuilder,
+        UInt16Builder, UInt64Builder,
+    },
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
@@ -51,9 +54,9 @@ pub fn dex_quotes_to_record_batch(
             pair_token0_builder.append_value(pair.0.to_string());
             pair_token1_builder.append_value(pair.1.to_string());
 
-            pre_state_price_builder.append_option(dex_prices.pre_state.to_f64());
-            post_state_price_builder.append_option(dex_prices.post_state.to_f64());
-            pool_liquidity_builder.append_option(dex_prices.pool_liquidity.to_f64());
+            pre_state_price_builder.append_option(dex_prices.pre_state.numerator().to_f64());
+            post_state_price_builder.append_option(dex_prices.post_state.numerator().to_f64());
+            pool_liquidity_builder.append_option(dex_prices.pool_liquidity.numerator().to_f64());
             goes_through_token0_builder.append_value(dex_prices.goes_through.0.to_string());
             goes_through_token1_builder.append_value(dex_prices.goes_through.1.to_string());
             is_transfer_builder.append_value(dex_prices.is_transfer);

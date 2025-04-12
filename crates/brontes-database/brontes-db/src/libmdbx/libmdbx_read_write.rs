@@ -11,7 +11,9 @@ use brontes_types::{
         address_to_protocol_info::ProtocolInfo,
         builder::BuilderInfo,
         cex::{quotes::CexPriceMap, trades::CexTradeMap},
-        dex::{make_filter_key_range, DexPrices, DexQuoteWithIndex, DexQuotes},
+        dex::{
+            decompose_key, make_filter_key_range, make_key, DexPrices, DexQuoteWithIndex, DexQuotes,
+        },
         initialized_state::{
             InitializedStateMeta, CEX_QUOTES_FLAG, CEX_TRADES_FLAG, DATA_NOT_PRESENT_NOT_AVAILABLE,
             DATA_PRESENT, DEX_PRICE_FLAG, META_FLAG,
@@ -400,7 +402,6 @@ impl StateToInitialize {
     }
 }
 
-#[async_trait]
 impl LibmdbxReader for LibmdbxReadWriter {
     fn get_most_recent_block(&self) -> eyre::Result<u64> {
         self.get_highest_block_number()
@@ -905,45 +906,39 @@ impl LibmdbxReader for LibmdbxReadWriter {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn fetch_dex_quotes_range(
-        &self,
+    async fn fetch_dex_quotes_range<'a>(
+        &'a self,
         start_block: u64,
         end_block: u64,
     ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>> {
-        let mut all_quotes_data = Vec::new();
-        info!(target: "brontes::db::export", start_block, end_block, "Fetching DexQuotes range...");
+        if start_block >= end_block {
+            return Ok(Vec::new());
+        }
 
-        // Iterate block by block (exclusive end_block)
-        for block_num in start_block..end_block {
-            match self.get_dex_quotes(block_num) {
-                // Use get_dex_quotes which is already implemented on self
-                Ok(dex_quotes_for_block) => {
-                    // Convert DexQuotes to Vec<(u64, DexQuoteWithIndex)>
-                    for (tx_idx, maybe_quote_map) in dex_quotes_for_block.0.into_iter().enumerate()
-                    {
-                        if let Some(quote_map) = maybe_quote_map {
-                            let quote_vec: Vec<(Pair, DexPrices)> = quote_map.into_iter().collect();
-                            if !quote_vec.is_empty() {
-                                // Create DexQuoteWithIndex struct for this tx_idx
-                                let dex_quote_with_index = DexQuoteWithIndex {
-                                    tx_idx: tx_idx as u16, // Ensure cast is safe, maybe add check?
-                                    quote:  quote_vec,
-                                };
-                                // Push tuple (block_num, DexQuoteWithIndex)
-                                all_quotes_data.push((block_num, dex_quote_with_index));
-                            }
-                        }
+        let start_key = make_key(start_block, 0);
+        let end_key = make_key(end_block - 1, u16::MAX);
+
+        info!(target: "brontes::db::export", %start_block, %end_block, start_key = ?start_key, end_key = ?end_key, "Fetching DexQuotes range using walk_range...");
+
+        self.db.view_db(|tx| {
+            let mut cursor = tx.cursor_read::<DexPrice>()?;
+            let range_walker = cursor.walk_range(start_key..=end_key)?;
+            let mut results = Vec::new();
+
+            for item in range_walker {
+                match item {
+                    Ok((key, value)) => {
+                        let (block_number, _) = decompose_key(key);
+                        results.push((block_number, value));
+                    }
+                    Err(e) => {
+                        warn!(target: "brontes::db::export", error=?e, "Error reading DexPrice entry during range scan, skipping entry.");
                     }
                 }
-                Err(e) => {
-                    // Log and continue if fetching for a single block fails
-                    warn!(target: "brontes::db::export", block=block_num, error=?e, "Failed to fetch dex quotes for block, skipping.");
-                    // Continue to the next block instead of returning an error
-                }
             }
-        }
-        info!(target: "brontes::db::export", count=all_quotes_data.len(), "Finished fetching DexQuotes range.");
-        Ok(all_quotes_data)
+            info!(target: "brontes::db::export", count=results.len(), "Finished fetching DexQuotes range scan.");
+            Ok(results)
+        })
     }
 }
 

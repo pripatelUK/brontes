@@ -9,7 +9,7 @@ use std::{
 use alloy_primitives::{Address, U128};
 use arrow::{array::RecordBatchReader, error::ArrowError, record_batch::RecordBatch};
 use brontes_types::{
-    db::{dex::DexQuoteWithIndex, searcher::SearcherContract, traits::LibmdbxReader},
+    db::traits::LibmdbxReader,
     mev::{Bundle, BundleData, MevBlock, MevType},
     pair::Pair,
 };
