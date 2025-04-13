@@ -927,12 +927,10 @@ impl LibmdbxReader for LibmdbxReadWriter {
 
             for item in range_walker {
                 match item {
-                    Ok(row) => {
-                        let key = row.key()?;
-                        let value = row.value()?;
-
+                    Ok(data) => {
+                        let key = data.into_key_val().key;
                         let (block_number, _) = decompose_key(key);
-                        results.push((block_number, value));
+                        results.push((block_number, data.into_key_val().value));
                     }
                     Err(e) => {
                         warn!(target: "brontes::db::export", error=?e, "Error reading DexPrice entry during range scan, skipping entry.");
