@@ -36,7 +36,7 @@ use futures::Future;
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use malachite::Rational;
-use reth_db::table::{Compress, Decompress, Encode};
+use reth_db::table::{Compress, Encode};
 use reth_interfaces::db::LogLevel;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tracing::{info, instrument, warn};
@@ -927,16 +927,9 @@ impl LibmdbxReader for LibmdbxReadWriter {
 
             for item in range_walker {
                 match item {
-                    Ok((key, compressed_value)) => {
-                        match compressed_value.decompress() {
-                            Ok(value) => {
-                                let (block_number, _) = decompose_key(key);
-                                results.push((block_number, value));
-                            }
-                            Err(e) => {
-                                warn!(target: "brontes::db::export", key=?key, error=?e, "Failed to decompress DexPrice value, skipping entry.");
-                            }
-                        }
+                    Ok((key, value)) => {
+                        let (block_number, _) = decompose_key(key);
+                        results.push((block_number, value));
                     }
                     Err(e) => {
                         warn!(target: "brontes::db::export", error=?e, "Error reading DexPrice entry during range scan, skipping entry.");
