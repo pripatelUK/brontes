@@ -927,7 +927,10 @@ impl LibmdbxReader for LibmdbxReadWriter {
 
             for item in range_walker {
                 match item {
-                    Ok((key, value)) => {
+                    Ok(row) => {
+                        let key = row.key()?;
+                        let value = row.value()?;
+
                         let (block_number, _) = decompose_key(key);
                         results.push((block_number, value));
                     }
