@@ -925,13 +925,9 @@ impl LibmdbxReader for LibmdbxReadWriter {
             let mut results = Vec::new();
             
             cursor.walk_range(start_key..=end_key)?.for_each(|inner| {
-                if let Ok(row) = inner {
-                    let block_number = decompose_key(row.key()).0;
-                    if let Ok(value) = row.value() {
-                        results.push((block_number, value));
-                    } else {
-                        warn!(target: "brontes::db::export", "Error decompressing DexPrice value during range scan, skipping entry.");
-                    }
+                if let Ok((key, val)) = inner.map(|row| (row.0, row.1)) {
+                    let block_number = decompose_key(key);
+                    results.push((block_number.0, val));
                 } else {
                     warn!(target: "brontes::db::export", "Error reading DexPrice entry during range scan, skipping entry.");
                 }
