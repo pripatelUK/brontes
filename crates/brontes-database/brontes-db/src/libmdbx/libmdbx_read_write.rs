@@ -906,8 +906,8 @@ impl LibmdbxReader for LibmdbxReadWriter {
     }
 
     #[instrument(level = "trace", skip(self))]
-    async fn fetch_dex_quotes_range<'a>(
-        &'a self,
+    fn fetch_dex_quotes_range(
+        &self,
         start_block: u64,
         end_block: u64,
     ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>> {

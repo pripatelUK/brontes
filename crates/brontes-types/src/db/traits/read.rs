@@ -165,5 +165,5 @@ pub trait LibmdbxReader: Send + Sync + Unpin + 'static {
         &self,
         start_block: u64,
         end_block: u64,
-    ) -> impl std::future::Future<Output = eyre::Result<Vec<(u64, DexQuoteWithIndex)>>> + Send;
+    ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>>;
 }

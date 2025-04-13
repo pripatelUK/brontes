@@ -351,20 +351,15 @@ where
         // End block needs to be exclusive for range fetching
         let end_block = self.end_block.unwrap_or(u64::MAX);
 
-        // Fetch data - This needs the actual DB fetching logic
-        // The exact method might differ based on LibmdbxReader trait implementation
-        // Assuming a method `fetch_dex_quotes_range` exists or needs to be added
+        // Fetch data synchronously now
         let dex_quotes_data = self
             .db
             .fetch_dex_quotes_range(start_block, end_block)
-            .await // Assuming async fetch
             .wrap_err("Failed to fetch DexPrice data from the database")?;
 
         if dex_quotes_data.is_empty() {
             warn!(target: "brontes::db::export", "No DexPrice data found for the given range.");
-            // Decide if this should be an error or just a warning
-            return Ok(()); // Or return Err(Error::msg("No DexPrice data
-                           // found..."))
+            return Ok(());
         }
 
         // Convert to RecordBatch using the new function
@@ -372,7 +367,6 @@ where
             .wrap_err("Failed to convert DexPrice data to record batch")?;
 
         // Write to Parquet
-        // Using sync_write_parquet for consistency with other exports, adjust if needed
         let path = get_path(self.base_dir_path.clone(), Tables::DexPrice, None)?;
         sync_write_parquet(dex_price_batch, path)?;
 
