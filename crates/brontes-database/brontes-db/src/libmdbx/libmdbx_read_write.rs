@@ -922,20 +922,21 @@ impl LibmdbxReader for LibmdbxReadWriter {
 
         self.db.view_db(|tx| {
             let mut cursor = tx.cursor_read::<DexPrice>()?;
-            let range_walker = cursor.walk_range(start_key..=end_key)?;
             let mut results = Vec::new();
-
-            for item in range_walker {
-                match item {
-                    Ok((key, value)) => {
-                        let (block_number, _) = decompose_key(key);
+            
+            cursor.walk_range(start_key..=end_key)?.for_each(|inner| {
+                if let Ok(row) = inner {
+                    let block_number = decompose_key(row.key()).0;
+                    if let Ok(value) = row.value() {
                         results.push((block_number, value));
+                    } else {
+                        warn!(target: "brontes::db::export", "Error decompressing DexPrice value during range scan, skipping entry.");
                     }
-                    Err(e) => {
-                        warn!(target: "brontes::db::export", error=?e, "Error reading DexPrice entry during range scan, skipping entry.");
-                    }
+                } else {
+                    warn!(target: "brontes::db::export", "Error reading DexPrice entry during range scan, skipping entry.");
                 }
-            }
+            });
+
             info!(target: "brontes::db::export", count=results.len(), "Finished fetching DexQuotes range scan.");
             Ok(results)
         })
