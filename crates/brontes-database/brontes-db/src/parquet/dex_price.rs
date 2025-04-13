@@ -10,10 +10,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use brontes_types::{db::dex::DexQuoteWithIndex, pair::Pair};
-use malachite::{
-    num::conversion::{string::options::ToSciOptions, traits::ToSci},
-    Rational,
-};
+use malachite_base::{num::conversion::traits::RoundingFrom, rounding_modes::RoundingMode};
 use tracing::warn;
 
 use super::utils::build_record_batch;
@@ -42,12 +39,6 @@ pub fn dex_quotes_to_record_batch(
     let mut is_transfer_builder = BooleanBuilder::with_capacity(initial_capacity);
     let mut first_hop_connections_builder = UInt64Builder::with_capacity(initial_capacity);
 
-    // Configure options for scientific notation string conversion
-    let mut sci_options = ToSciOptions::default();
-    // Using max_significant_digits is generally better for preserving overall
-    // magnitude
-    sci_options.set_max_significant_digits(Some(36));
-
     for (block_number, dex_quote_with_index) in block_quotes {
         let tx_idx = dex_quote_with_index.tx_idx;
         for (pair, dex_prices) in dex_quote_with_index.quote {
@@ -56,40 +47,17 @@ pub fn dex_quotes_to_record_batch(
             pair_token0_builder.append_value(pair.0.to_string());
             pair_token1_builder.append_value(pair.1.to_string());
 
-            // Convert Rational to f64 using to_sci_with_options and parse, fallback to NaN
-            match dex_prices
-                .pre_state
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => pre_state_price_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pre_state", value=%dex_prices.pre_state, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    pre_state_price_builder.append_value(f64::NAN);
-                }
-            }
-            match dex_prices
-                .post_state
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => post_state_price_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="post_state", value=%dex_prices.post_state, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    post_state_price_builder.append_value(f64::NAN);
-                }
-            }
-            match dex_prices
-                .pool_liquidity
-                .to_sci_with_options(sci_options)
-                .parse::<f64>()
-            {
-                Ok(val) => pool_liquidity_builder.append_value(val),
-                Err(e) => {
-                    warn!(target: "brontes::db::export::dex_price", block=block_number, tx_idx=tx_idx, pair=?pair, field="pool_liquidity", value=%dex_prices.pool_liquidity, error=?e, "Failed to parse Rational as f64, using NaN.");
-                    pool_liquidity_builder.append_value(f64::NAN);
-                }
-            }
+            let (pre_state_f64, _) =
+                f64::rounding_from(&dex_prices.pre_state, RoundingMode::Nearest);
+            pre_state_price_builder.append_value(pre_state_f64);
+
+            let (post_state_f64, _) =
+                f64::rounding_from(&dex_prices.post_state, RoundingMode::Nearest);
+            post_state_price_builder.append_value(post_state_f64);
+
+            let (pool_liquidity_f64, _) =
+                f64::rounding_from(&dex_prices.pool_liquidity, RoundingMode::Nearest);
+            pool_liquidity_builder.append_value(pool_liquidity_f64);
 
             goes_through_token0_builder.append_value(dex_prices.goes_through.0.to_string());
             goes_through_token1_builder.append_value(dex_prices.goes_through.1.to_string());
