@@ -10,7 +10,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use brontes_types::{db::dex::DexQuoteWithIndex, pair::Pair};
-use malachite_base::rounding_modes::RoundingMode;
 use tracing::warn;
 
 use super::utils::build_record_batch;
