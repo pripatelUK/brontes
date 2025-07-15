@@ -373,7 +373,11 @@ impl Tables {
             Self::MevBlocks => exporter.export_mev_blocks().await,
             Self::SearcherContracts | Self::SearcherEOAs => exporter.export_searcher_info().await,
             Self::Builder => exporter.export_builder_info().await,
-            _ => unreachable!("Parquet export not yet supported for this table"),
+            Self::DexPrice => exporter.export_dex_prices().await,
+            _ => {
+                tracing::error!(target: "brontes::db::export", table = ?self, "Parquet export not yet supported for this table");
+                Err(eyre::eyre!("Parquet export not supported for {:?}", self))
+            }
         }
     }
 

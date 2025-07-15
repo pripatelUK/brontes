@@ -1,22 +1,31 @@
 use std::{
+    fmt::Display,
     fs::File,
+    io::{Read, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use arrow::record_batch::RecordBatch;
+use alloy_primitives::{Address, U128};
+use arrow::{array::RecordBatchReader, error::ArrowError, record_batch::RecordBatch};
 use brontes_types::{
     db::traits::LibmdbxReader,
-    mev::{BundleData, MevType},
+    mev::{Bundle, BundleData, MevBlock, MevType},
+    pair::Pair,
 };
 use chrono::Local;
 use eyre::{Error, Ok, Result, WrapErr};
 use futures::future::try_join_all;
+use itertools::Itertools;
 use parquet::{
     arrow::{async_writer::AsyncArrowWriter, ArrowWriter},
-    basic::Compression,
-    file::properties::WriterProperties,
+    basic::{Compression, Encoding, ZstdLevel},
+    errors::ParquetError,
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
 };
-use tracing::error;
+use serde_json;
+use thiserror::Error;
+use tracing::{debug, error, info, warn};
 
 use crate::Tables;
 
@@ -24,6 +33,7 @@ use crate::Tables;
 mod address_meta;
 mod builder;
 mod bundle_header;
+mod dex_price;
 mod mev_block;
 mod mev_data;
 mod normalized_actions;
@@ -334,6 +344,35 @@ where
 
         Ok(())
     }
+
+    pub async fn export_dex_prices(&self) -> Result<(), Error> {
+        info!(target: "brontes::db::export", "Exporting DexPrice table...");
+        let start_block = self.start_block.unwrap_or(0);
+        // End block needs to be exclusive for range fetching
+        let end_block = self.end_block.unwrap_or(u64::MAX);
+
+        // Fetch data synchronously now
+        let dex_quotes_data = self
+            .db
+            .fetch_dex_quotes_range(start_block, end_block)
+            .wrap_err("Failed to fetch DexPrice data from the database")?;
+
+        if dex_quotes_data.is_empty() {
+            warn!(target: "brontes::db::export", "No DexPrice data found for the given range.");
+            return Ok(());
+        }
+
+        // Convert to RecordBatch using the new function
+        let dex_price_batch = dex_price::dex_quotes_to_record_batch(dex_quotes_data)
+            .wrap_err("Failed to convert DexPrice data to record batch")?;
+
+        // Write to Parquet
+        let path = get_path(self.base_dir_path.clone(), Tables::DexPrice, None)?;
+        sync_write_parquet(dex_price_batch, path)?;
+
+        info!(target: "brontes::db::export", "Finished exporting DexPrice table.");
+        Ok(())
+    }
 }
 
 async fn write_parquet(record_batch: RecordBatch, file_path: PathBuf) -> Result<()> {
@@ -424,7 +463,8 @@ impl Tables {
             Tables::SearcherEOAs => DEFAULT_SEARCHER_INFO_DIR,
             Tables::SearcherContracts => DEFAULT_SEARCHER_INFO_DIR,
             Tables::Builder => DEFAULT_BUILDER_INFO_DIR,
-            _ => panic!("Unsupported table type"),
+            Tables::DexPrice => DEFAULT_DEX_PRICE_DIR,
+            _ => panic!("Unsupported table type for default path"),
         }
     }
 }
@@ -433,3 +473,4 @@ pub const DEFAULT_BLOCK_DIR: &str = "mev";
 pub const DEFAULT_METADATA_DIR: &str = "address_metadata";
 pub const DEFAULT_SEARCHER_INFO_DIR: &str = "searcher_info";
 pub const DEFAULT_BUILDER_INFO_DIR: &str = "builder-info";
+pub const DEFAULT_DEX_PRICE_DIR: &str = "dex_prices";

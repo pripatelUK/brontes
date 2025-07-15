@@ -1,6 +1,7 @@
 use std::{ops::RangeInclusive, path::Path, sync::Arc};
 
 use alloy_primitives::Address;
+use async_trait::async_trait;
 use brontes_metrics::db_reads::LibmdbxMetrics;
 use brontes_pricing::Protocol;
 use brontes_types::{
@@ -10,7 +11,9 @@ use brontes_types::{
         address_to_protocol_info::ProtocolInfo,
         builder::BuilderInfo,
         cex::{quotes::CexPriceMap, trades::CexTradeMap},
-        dex::{make_filter_key_range, DexPrices, DexQuotes},
+        dex::{
+            decompose_key, make_filter_key_range, make_key, DexPrices, DexQuoteWithIndex, DexQuotes,
+        },
         initialized_state::{
             InitializedStateMeta, CEX_QUOTES_FLAG, CEX_TRADES_FLAG, DATA_NOT_PRESENT_NOT_AVAILABLE,
             DATA_PRESENT, DEX_PRICE_FLAG, META_FLAG,
@@ -36,7 +39,7 @@ use malachite::Rational;
 use reth_db::table::{Compress, Encode};
 use reth_interfaces::db::LogLevel;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use super::{
     libmdbx_writer::{LibmdbxWriter, StampedWriterMessage, WriterMessage},
@@ -900,6 +903,39 @@ impl LibmdbxReader for LibmdbxReadWriter {
             },
             |cursor| Ok(cursor.next().map(|inner| inner.map(|i| (i.0, i.1)))?),
         )
+    }
+
+    #[instrument(level = "trace", skip(self))]
+    fn fetch_dex_quotes_range(
+        &self,
+        start_block: u64,
+        end_block: u64,
+    ) -> eyre::Result<Vec<(u64, DexQuoteWithIndex)>> {
+        if start_block >= end_block {
+            return Ok(Vec::new());
+        }
+
+        let start_key = make_key(start_block, 0);
+        let end_key = make_key(end_block - 1, u16::MAX);
+
+        info!(target: "brontes::db::export", %start_block, %end_block, start_key = ?start_key, end_key = ?end_key, "Fetching DexQuotes range using walk_range...");
+
+        self.db.view_db(|tx| {
+            let mut cursor = tx.cursor_read::<DexPrice>()?;
+            let mut results = Vec::new();
+            
+            cursor.walk_range(start_key..=end_key)?.for_each(|inner| {
+                if let Ok((key, val)) = inner.map(|row| (row.0, row.1)) {
+                    let block_number = decompose_key(key);
+                    results.push((block_number.0, val));
+                } else {
+                    warn!(target: "brontes::db::export", "Error reading DexPrice entry during range scan, skipping entry.");
+                }
+            });
+
+            info!(target: "brontes::db::export", count=results.len(), "Finished fetching DexQuotes range scan.");
+            Ok(results)
+        })
     }
 }
 
