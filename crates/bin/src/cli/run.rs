@@ -158,7 +158,13 @@ impl RunArgs {
         );
 
         let range_type = self.get_range_type()?;
-        let clickhouse = static_object(load_clickhouse(cex_download_config, self.run_id).await?);
+        // Use the ClickHouse client from the ClickhouseMiddleware instead of creating a
+        // separate one
+        let clickhouse = static_object({
+            let mut ch_client = libmdbx.client.clone();
+            ch_client.cex_download_config = cex_download_config;
+            ch_client
+        });
         tracing::info!(target: "brontes", "Databases initialized");
 
         let only_cex_dex = self
