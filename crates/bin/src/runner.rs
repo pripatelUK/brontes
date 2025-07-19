@@ -69,24 +69,28 @@ async fn try_initialize_prometheus(port: u16) {
     }
 }
 
-async fn run_to_completion_or_panic<F, E>(
+pub(crate) async fn run_to_completion_or_panic<F, E>(
     mut tasks: BrontesTaskManager,
     fut: F,
 ) -> Result<BrontesTaskManager, E>
 where
     F: Future<Output = Result<(), E>>,
-    E: Send + Sync + From<brontes_types::PanickedTaskError> + 'static,
 {
-    {
-        pin_mut!(fut);
-        tokio::select! {
-            err = &mut tasks => {
-                return Err(err.into())
-            },
-            res = fut => res?,
-        }
+    tracing::info!(target: "brontes::runner", "Starting run_to_completion_or_panic with task manager");
+
+    // Take ownership of the signal to prevent premature drop
+    let signal = tasks.take_signal();
+
+    // Run the future to completion
+    let result = fut.await;
+
+    // Only trigger shutdown after the future completes or errors
+    drop(signal);
+
+    match result {
+        Ok(()) => Ok(tasks),
+        Err(e) => Err(e),
     }
-    Ok(tasks)
 }
 pub async fn run_until_ctrl_c<F, E>(fut: F) -> Result<(), E>
 where
@@ -128,8 +132,8 @@ where
 }
 
 struct AsyncCliRunner {
-    context:       CliContext,
-    task_manager:  BrontesTaskManager,
+    context: CliContext,
+    task_manager: BrontesTaskManager,
     tokio_runtime: tokio::runtime::Runtime,
 }
 

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, BlockHash};
 use brontes_database::clickhouse::ClickhouseHandle;
 use brontes_types::{
     db::{
@@ -24,7 +24,6 @@ use brontes_types::{
 };
 use futures::{stream::FuturesOrdered, Future, Stream, StreamExt};
 use itertools::Itertools;
-use reth_primitives::BlockHash;
 use tracing::error;
 
 use super::dex_pricing::WaitingForPricerFuture;
@@ -39,14 +38,14 @@ pub type ClickhouseMetadataFuture =
 
 /// deals with all cases on how we get and finalize our metadata
 pub struct MetadataLoader<T: TracingProvider, CH: ClickhouseHandle> {
-    clickhouse:            Option<&'static CH>,
-    dex_pricer_stream:     WaitingForPricerFuture<T>,
-    clickhouse_futures:    ClickhouseMetadataFuture,
-    result_buf:            VecDeque<BlockData>,
-    needs_more_data:       Arc<AtomicBool>,
-    cex_window_data:       CexWindow,
+    clickhouse: Option<&'static CH>,
+    dex_pricer_stream: WaitingForPricerFuture<T>,
+    clickhouse_futures: ClickhouseMetadataFuture,
+    result_buf: VecDeque<BlockData>,
+    needs_more_data: Arc<AtomicBool>,
+    cex_window_data: CexWindow,
     always_generate_price: bool,
-    force_no_dex_pricing:  bool,
+    force_no_dex_pricing: bool,
 }
 
 impl<T: TracingProvider, CH: ClickhouseHandle> MetadataLoader<T, CH> {
@@ -77,9 +76,13 @@ impl<T: TracingProvider, CH: ClickhouseHandle> MetadataLoader<T, CH> {
     }
 
     pub fn is_finished(&self) -> bool {
-        self.result_buf.is_empty()
-            && self.dex_pricer_stream.is_done()
-            && self.clickhouse_futures.is_empty()
+        if self.force_no_dex_pricing {
+            self.result_buf.is_empty() && self.clickhouse_futures.is_empty()
+        } else {
+            self.result_buf.is_empty()
+                && self.dex_pricer_stream.is_done()
+                && self.clickhouse_futures.is_empty()
+        }
     }
 
     pub fn generate_dex_pricing<DB: LibmdbxReader>(
@@ -142,7 +145,7 @@ impl<T: TracingProvider, CH: ClickhouseHandle> MetadataLoader<T, CH> {
             let last_block = block + offsets;
             self.cex_window_data.init(last_block, trades);
 
-            return Some(self.cex_window_data.cex_trade_map())
+            return Some(self.cex_window_data.cex_trade_map());
         }
 
         let last_block = self.cex_window_data.get_last_end_block_loaded() + 1;
@@ -277,7 +280,7 @@ impl<T: TracingProvider, CH: ClickhouseHandle> MetadataLoader<T, CH> {
                         error!(err=?e);
                     })
                 {
-                    break res
+                    break res;
                 } else {
                     tracing::warn!(
                         ?block,
@@ -307,7 +310,7 @@ impl<T: TracingProvider, CH: ClickhouseHandle> MetadataLoader<T, CH> {
                         trades.merge_in_map(range.value);
                     }
 
-                    break trades
+                    break trades;
                 } else {
                     tracing::warn!(
                         ?block,
@@ -335,11 +338,32 @@ impl<T: TracingProvider, CH: ClickhouseHandle> Stream for MetadataLoader<T, CH> 
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         if self.force_no_dex_pricing {
+            // First check result_buf
             if let Some(res) = self.result_buf.pop_front() {
-                return Poll::Ready(Some(res))
+                return Poll::Ready(Some(res));
             }
-            cx.waker().wake_by_ref();
-            return Poll::Pending
+
+            // Then check clickhouse futures
+            while let Poll::Ready(Some((block, tree, metadata))) =
+                self.clickhouse_futures.poll_next_unpin(cx)
+            {
+                let data = BlockData { metadata: Arc::new(metadata), tree: Arc::new(tree) };
+                self.result_buf.push_back(data);
+            }
+
+            // Check result_buf again after processing clickhouse futures
+            if let Some(res) = self.result_buf.pop_front() {
+                return Poll::Ready(Some(res));
+            }
+
+            // Only return Pending if there are still futures to process
+            if !self.clickhouse_futures.is_empty() {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+
+            // Otherwise we're done
+            return Poll::Ready(None);
         }
 
         while let Poll::Ready(Some((block, tree, meta))) =
@@ -351,10 +375,9 @@ impl<T: TracingProvider, CH: ClickhouseHandle> Stream for MetadataLoader<T, CH> 
         }
 
         match self.dex_pricer_stream.poll_next_unpin(cx) {
-            Poll::Ready(Some((tree, metadata))) => Poll::Ready(Some(BlockData {
-                metadata: Arc::new(metadata),
-                tree:     Arc::new(tree),
-            })),
+            Poll::Ready(Some((tree, metadata))) => {
+                Poll::Ready(Some(BlockData { metadata: Arc::new(metadata), tree: Arc::new(tree) }))
+            }
             Poll::Ready(None) => Poll::Ready(self.result_buf.pop_front()),
             Poll::Pending => {
                 if let Some(f) = self.result_buf.pop_front() {
