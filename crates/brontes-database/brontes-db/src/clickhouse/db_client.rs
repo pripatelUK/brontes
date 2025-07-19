@@ -137,7 +137,7 @@ impl Clickhouse {
 
     pub async fn get_and_inc_run_id(&self) -> eyre::Result<u64> {
         tracing::debug!("get_and_inc_run_id - starting query for max run_id");
-        let id = (self
+        let id: brontes_types::db::RunId = (self
             .client
             .query_one::<u64, _>("select max(run_id) from brontes.run_id", &())
             .await?
