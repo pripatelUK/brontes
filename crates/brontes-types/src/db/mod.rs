@@ -57,11 +57,18 @@ impl<Table: Debug + Clone + serde::Serialize + DbRow + Sync + Send> InsertRow
 
 #[derive(Debug, Clone, serde::Serialize, ::clickhouse::Row)]
 pub struct RunId {
-    pub run_id: u64,
+    pub run_id:       u64,
+    pub last_updated: u64,
 }
 
 impl From<u64> for RunId {
     fn from(value: u64) -> Self {
-        Self { run_id: value }
+        Self {
+            run_id:       value,
+            last_updated: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        }
     }
 }
