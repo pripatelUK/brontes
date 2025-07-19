@@ -17,6 +17,11 @@ use brontes_types::{
             trades::{CexTradesConverter, RawCexTrades},
             BestCexPerPair,
         },
+        clickhouse_serde::tx_trace::{
+            ClickhouseCallAction, ClickhouseCallOutput, ClickhouseCreateAction,
+            ClickhouseCreateOutput, ClickhouseDecodedCallData, ClickhouseLogs,
+            ClickhouseRewardAction, ClickhouseSelfDestructAction,
+        },
         dex::{DexQuotes, DexQuotesWithBlockNumber},
         metadata::{BlockMetadata, BlockMetadataInner, Metadata},
         normalized_actions::TransactionRoot,
@@ -40,25 +45,18 @@ use db_interfaces::{
 };
 use eyre::Result;
 use futures::future::ok;
-use itertools::Itertools;
-use itertools::izip;
+use itertools::{izip, Itertools};
 use reth_primitives::{BlockHash, TxHash};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::UnboundedSender, time::Duration};
 use tracing::{debug, error, warn};
-use brontes_types::db::clickhouse_serde::tx_trace::{
-    ClickhouseCallAction, ClickhouseCallOutput, ClickhouseCreateAction,
-    ClickhouseCreateOutput, ClickhouseDecodedCallData, ClickhouseLogs,
-    ClickhouseRewardAction, ClickhouseSelfDestructAction,
-};
-use super::tx_traces::{
-    MetaTuple, TxTraceRow,
-    TxTraceTuple,
-};
 
 use super::{
-    cex_config::CexDownloadConfig, dbms::*, ClickhouseHandle, MOST_VOLUME_PAIR_EXCHANGE,
-    P2P_OBSERVATIONS, PRIVATE_FLOW, RAW_CEX_QUOTES, RAW_CEX_TRADES,
+    cex_config::CexDownloadConfig,
+    dbms::*,
+    tx_traces::{MetaTuple, TxTraceRow, TxTraceTuple},
+    ClickhouseHandle, MOST_VOLUME_PAIR_EXCHANGE, P2P_OBSERVATIONS, PRIVATE_FLOW, RAW_CEX_QUOTES,
+    RAW_CEX_TRADES,
 };
 #[cfg(feature = "local-clickhouse")]
 use super::{BLOCK_TIMES, CEX_SYMBOLS};
@@ -91,7 +89,9 @@ impl Clickhouse {
         tip: bool,
         run_id: Option<u64>,
     ) -> Self {
+        tracing::debug!("Clickhouse::new - starting with run_id: {:?}", run_id);
         let client = config.build();
+        tracing::debug!("Clickhouse::new - built client");
         let mut this = Self {
             client,
             cex_download_config,
@@ -102,20 +102,33 @@ impl Clickhouse {
                 .with_attempts(6)
                 .build(),
         };
+        tracing::debug!("Clickhouse::new - created struct");
 
         this.run_id = if let Some(run_id) = run_id {
+            tracing::debug!("Clickhouse::new - using provided run_id: {}", run_id);
             run_id
         } else {
+            tracing::debug!("Clickhouse::new - calling get_and_inc_run_id");
             this.get_and_inc_run_id()
                 .await
                 .expect("failed to set run_id")
         };
+        tracing::debug!("Clickhouse::new - completed with run_id: {}", this.run_id);
         this
     }
 
     pub async fn new_default(run_id: Option<u64>) -> Self {
-        Clickhouse::new(clickhouse_config(), Default::default(), Default::default(), false, run_id)
-            .await
+        tracing::debug!("Clickhouse::new_default - starting with run_id: {:?}", run_id);
+        let result = Clickhouse::new(
+            clickhouse_config(),
+            Default::default(),
+            Default::default(),
+            false,
+            run_id,
+        )
+        .await;
+        tracing::debug!("Clickhouse::new_default - completed");
+        result
     }
 
     pub fn inner(&self) -> &ClickhouseClient<BrontesClickhouseTables> {
@@ -123,14 +136,18 @@ impl Clickhouse {
     }
 
     pub async fn get_and_inc_run_id(&self) -> eyre::Result<u64> {
+        tracing::debug!("get_and_inc_run_id - starting query for max run_id");
         let id = (self
             .client
             .query_one::<u64, _>("select max(run_id) from brontes.run_id", &())
             .await?
             + 1)
         .into();
+        tracing::debug!("get_and_inc_run_id - got max run_id, new id will be: {}", id.run_id);
 
+        tracing::debug!("get_and_inc_run_id - starting insert of new run_id");
         self.client.insert_one::<BrontesRun_Id>(&id).await?;
+        tracing::debug!("get_and_inc_run_id - completed insert");
 
         Ok(id.run_id)
     }
@@ -1099,6 +1116,7 @@ impl Clickhouse {
 }
 
 pub fn clickhouse_config() -> db_interfaces::clickhouse::config::ClickhouseConfig {
+    tracing::debug!("clickhouse_config - reading environment variables");
     let url = format!(
         "{}:{}",
         std::env::var("CLICKHOUSE_URL").expect("CLICKHOUSE_URL not found in .env"),
@@ -1106,6 +1124,7 @@ pub fn clickhouse_config() -> db_interfaces::clickhouse::config::ClickhouseConfi
     );
     let user = std::env::var("CLICKHOUSE_USER").expect("CLICKHOUSE_USER not found in .env");
     let pass = std::env::var("CLICKHOUSE_PASS").expect("CLICKHOUSE_PASS not found in .env");
+    tracing::debug!("clickhouse_config - creating config with url: {}, user: {}", url, user);
 
     db_interfaces::clickhouse::config::ClickhouseConfig::new(user, pass, url, true, None)
 }
