@@ -137,17 +137,35 @@ impl Clickhouse {
 
     pub async fn get_and_inc_run_id(&self) -> eyre::Result<u64> {
         tracing::debug!("get_and_inc_run_id - starting query for max run_id");
-        let id: brontes_types::db::RunId = (self
+
+        let max_run_id = match self
             .client
             .query_one::<u64, _>("select max(run_id) from brontes.run_id", &())
-            .await?
-            + 1)
-        .into();
+            .await
+        {
+            Ok(id) => {
+                tracing::debug!("get_and_inc_run_id - query successful, max_run_id: {}", id);
+                id
+            }
+            Err(e) => {
+                tracing::error!("get_and_inc_run_id - query failed: {:?}", e);
+                return Err(e.into());
+            }
+        };
+
+        let id: brontes_types::db::RunId = (max_run_id + 1).into();
         tracing::debug!("get_and_inc_run_id - got max run_id, new id will be: {}", id.run_id);
 
         tracing::debug!("get_and_inc_run_id - starting insert of new run_id");
-        self.client.insert_one::<BrontesRun_Id>(&id).await?;
-        tracing::debug!("get_and_inc_run_id - completed insert");
+        match self.client.insert_one::<BrontesRun_Id>(&id).await {
+            Ok(_) => {
+                tracing::debug!("get_and_inc_run_id - completed insert successfully");
+            }
+            Err(e) => {
+                tracing::error!("get_and_inc_run_id - insert failed: {:?}", e);
+                return Err(e.into());
+            }
+        }
 
         Ok(id.run_id)
     }
