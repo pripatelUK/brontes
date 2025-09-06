@@ -247,6 +247,36 @@ pub mod u256 {
     }
 }
 
+pub mod option_u256 {
+    use std::{fmt::Debug, str::FromStr};
+
+    use alloy_primitives::U256;
+    use serde::{
+        de::{Deserialize, Deserializer},
+        ser::{Serialize, Serializer},
+    };
+    
+    
+    pub fn serialize<S: Serializer, T: Into<U256> + Debug>(
+        u: &Option<T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        u.as_ref().map(|u| format!("{:?}", u)).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, T: From<U256>>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let data: Option<String> = Deserialize::deserialize(deserializer)?;
+        if let Some(d) = data {
+            Ok(Some(U256::from_str(&d).map_err(serde::de::Error::custom)?.into()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 pub mod vec_b256 {
 
     use std::{fmt::Debug, str::FromStr};
@@ -950,5 +980,23 @@ pub mod trade_type {
             "Taker" => TradeType::Taker,
             _ => panic!("not maker or taker"),
         })
+    }
+}
+
+pub mod u128_from_hex {
+    use serde::de::Deserializer;
+
+    pub fn deserialize_u128_from_hex<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // First deserialize as a string
+        let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+
+        // Remove "0x" prefix if present
+        let s = s.strip_prefix("0x").unwrap_or(&s);
+
+        // Parse the hex string into u128
+        u128::from_str_radix(s, 16).map_err(serde::de::Error::custom)
     }
 }

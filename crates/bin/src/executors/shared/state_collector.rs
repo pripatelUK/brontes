@@ -96,8 +96,10 @@ impl<T: TracingProvider, DB: LibmdbxReader + DBWriter, CH: ClickhouseHandle>
 
         let res = if let Some(metrics) = metrics {
             metrics.add_pending_tree(id);
+            metrics.update_gas_used(id, header.gas_used);
+            let txs_count = traces.len();
             metrics
-                .tree_builder(id, || {
+                .tree_builder(id, txs_count, || {
                     Box::pin(tokio::spawn(classifier.build_block_tree(
                         traces,
                         header,
@@ -120,8 +122,15 @@ impl<T: TracingProvider, DB: LibmdbxReader + DBWriter, CH: ClickhouseHandle>
 
         let generate_pricing = self.metadata_fetcher.generate_dex_pricing(block, self.db);
         self.collection_future = Some(Box::pin(
-            Self::state_future(generate_pricing, block, execute_fut, self.classifier, id, metrics)
-                .instrument(span!(Level::ERROR, "mev processor", block_number=%block)),
+            Self::state_future(
+                generate_pricing,
+                block,
+                execute_fut,
+                self.classifier,
+                id,
+                metrics,
+            )
+            .instrument(span!(Level::ERROR, "mev processor", block_number=%block)),
         ))
     }
 

@@ -1,3 +1,4 @@
+pub mod discovery_logs_only;
 pub mod discovery_only;
 mod processors;
 mod range;
@@ -44,6 +45,7 @@ use self::shared::{
     dex_pricing::WaitingForPricerFuture, metadata_loader::MetadataLoader,
     state_collector::StateCollector,
 };
+use brontes_timeboost::auction::ExpressLaneAuctionProvider;
 use crate::cli::static_object;
 
 pub const PROMETHEUS_ENDPOINT_IP: [u8; 4] = [0u8, 0u8, 0u8, 0u8];
@@ -65,6 +67,7 @@ pub struct BrontesRunConfig<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseH
     pub metrics: bool,
     pub is_snapshot: bool,
     pub cex_window: usize,
+    pub max_pending: usize,
     _p: PhantomData<P>,
 }
 
@@ -88,6 +91,7 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
         metrics: bool,
         is_snapshot: bool,
         cex_window: usize,
+        max_pending: usize,
     ) -> Self {
         Self {
             clickhouse,
@@ -105,6 +109,7 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
             tip_db,
             is_snapshot,
             cex_window,
+            max_pending,
             _p: PhantomData,
         }
     }
@@ -347,6 +352,7 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
         back_from_tip: u64,
         pricing_metrics: Option<DexPricingMetrics>,
     ) -> TipInspector<T, DB, CH, P> {
+        let range_metrics = self.metrics.then(|| GlobalRangeMetrics::new(vec![0]));
         let state_collector = self.init_state_collector(
             range_id,
             executor,
@@ -362,6 +368,7 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
             self.parser,
             self.tip_db,
             self.inspectors,
+            range_metrics,
         )
     }
 
@@ -429,8 +436,10 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
             data_req.clone(),
             pricing_metrics.clone(),
             executor.clone(),
+            self.max_pending,
         );
 
+        let express_lane_auction_provider = ExpressLaneAuctionProvider::new(self.parser.get_tracer());
         let pricing = WaitingForPricerFuture::new(pricer, executor);
         let fetcher = MetadataLoader::new(
             tip.then_some(self.clickhouse),
@@ -439,6 +448,8 @@ impl<T: TracingProvider, DB: LibmdbxInit, CH: ClickhouseHandle, P: Processor>
             self.force_no_dex_pricing,
             data_req,
             self.cex_window,
+            self.max_pending,
+            express_lane_auction_provider,
         );
 
         let block_window_size = self

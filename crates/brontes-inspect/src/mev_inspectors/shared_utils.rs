@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use alloy_primitives::{Address, FixedBytes};
 use brontes_database::libmdbx::LibmdbxReader;
-use brontes_metrics::inspectors::OutlierMetrics;
+use brontes_metrics::inspectors::{OutlierMetrics, ProfitMetrics};
 use brontes_types::{
     db::{
         dex::{BlockPrice, PriceAt},
@@ -19,7 +19,7 @@ use brontes_types::{
     },
     pair::Pair,
     utils::ToFloatNearest,
-    ActionIter, FastHashMap, FastHashSet, GasDetails, TxInfo,
+    ActionIter, BlockTree, FastHashMap, FastHashSet, GasDetails, Protocol, TxInfo,
 };
 use itertools::Itertools;
 use malachite::{
@@ -30,20 +30,25 @@ use malachite::{
     Rational,
 };
 use reth_primitives::TxHash;
-
 const CONNECTION_TH: usize = 2;
 const LOW_LIQ_TH: Rational = Rational::const_from_unsigned(50_000u64);
 
 #[derive(Debug)]
 pub struct SharedInspectorUtils<'db, DB: LibmdbxReader> {
-    pub(crate) quote: Address,
-    pub(crate) db:    &'db DB,
-    pub metrics:      Option<OutlierMetrics>,
+    pub(crate) quote:   Address,
+    pub(crate) db:      &'db DB,
+    pub metrics:        Option<OutlierMetrics>,
+    pub profit_metrics: Option<ProfitMetrics>,
 }
 
 impl<'db, DB: LibmdbxReader> SharedInspectorUtils<'db, DB> {
-    pub fn new(quote_address: Address, db: &'db DB, metrics: Option<OutlierMetrics>) -> Self {
-        SharedInspectorUtils { quote: quote_address, db, metrics }
+    pub fn new(
+        quote_address: Address,
+        db: &'db DB,
+        metrics: Option<OutlierMetrics>,
+        profit_metrics: Option<ProfitMetrics>,
+    ) -> Self {
+        SharedInspectorUtils { quote: quote_address, db, metrics, profit_metrics }
     }
 }
 type TokenDeltas = FastHashMap<Address, Rational>;
@@ -53,6 +58,10 @@ type PossibleSwapDetails = Vec<(TokenInfoWithAddress, bool, Rational, Address, u
 impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
     pub fn get_metrics(&self) -> Option<&OutlierMetrics> {
         self.metrics.as_ref()
+    }
+
+    pub fn get_profit_metrics(&self) -> Option<&ProfitMetrics> {
+        self.profit_metrics.as_ref()
     }
 
     /// Calculates the USD value of the token balance deltas by address
@@ -320,6 +329,13 @@ impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
             })
             .sum::<f64>();
 
+        let express_lane_price = metadata
+            .express_lane_auction
+            .as_ref()
+            .map(|auction| auction.price.unwrap_or_default());
+        let express_lane_price_usd = express_lane_price
+            .map(|price| metadata.get_gas_price_usd(price.to::<u128>(), self.quote).to_float());
+
         let fund = info
             .get_searcher_contract_info()
             .map(|i| i.fund)
@@ -338,6 +354,17 @@ impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
             mev_type,
             no_pricing_calculated,
             balance_deltas,
+            timeboosted: info.timeboosted,
+            express_lane_controller: metadata
+                .express_lane_auction
+                .as_ref()
+                .map(|auction| auction.controller),
+            express_lane_price,
+            express_lane_price_usd,
+            express_lane_round: metadata
+                .express_lane_auction
+                .as_ref()
+                .map(|auction| auction.round),
         }
     }
 
@@ -380,6 +407,14 @@ impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
             .or_else(|| info.get_searcher_eao_info().map(|f| f.fund))
             .unwrap_or_default();
 
+        let express_lane_price = metadata
+            .express_lane_auction
+            .as_ref()
+            .map(|auction| auction.price.unwrap_or_default());
+
+        let express_lane_price_usd = express_lane_price
+            .map(|price| metadata.get_gas_price_usd(price.to::<u128>(), self.quote).to_float());
+
         BundleHeader {
             block_number: metadata.block_num,
             tx_index: info.tx_index,
@@ -392,6 +427,17 @@ impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
             mev_type,
             no_pricing_calculated,
             balance_deltas,
+            timeboosted: info.timeboosted,
+            express_lane_controller: metadata
+                .express_lane_auction
+                .as_ref()
+                .map(|auction| auction.controller),
+            express_lane_price,
+            express_lane_price_usd,
+            express_lane_round: metadata
+                .express_lane_auction
+                .as_ref()
+                .map(|auction| auction.round),
         }
     }
 
@@ -499,6 +545,40 @@ impl<DB: LibmdbxReader> SharedInspectorUtils<'_, DB> {
                 TransactionAccounting { tx_hash, address_deltas }
             })
             .collect()
+    }
+
+    pub fn get_related_protocols_liquidation(&self, actions: &[Action]) -> HashSet<Protocol> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Swap(swap) => Some(swap.protocol),
+                Action::SwapWithFee(swap) => Some(swap.protocol),
+                Action::Liquidation(liquidation) => Some(liquidation.protocol),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn get_related_protocols_atomic(
+        &self,
+        trees: &[Arc<BlockTree<Action>>],
+    ) -> HashSet<Protocol> {
+        trees
+            .iter()
+            .flat_map(|tree| &tree.tx_roots)
+            .flat_map(|root| &root.data_store.0)
+            .filter_map(|actions| actions.as_ref())
+            .flat_map(|actions| actions.iter())
+            .filter_map(|action| match action {
+                Action::Swap(swap) => Some(swap.protocol),
+                Action::SwapWithFee(swap) => Some(swap.protocol),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn get_related_protocols_cex_dex(&self, dex_swaps: &[NormalizedSwap]) -> HashSet<Protocol> {
+        dex_swaps.iter().map(|swap| swap.protocol).collect()
     }
 
     pub fn fetch_address_name(&self, address: Address) -> Option<String> {
